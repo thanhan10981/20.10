@@ -1,6 +1,6 @@
 // Dependency-free logic checks. This is a DOM simulation, not a browser/layout test.
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
-const html=fs.readFileSync(require('node:path').join(__dirname,'../_20_10.html'),'utf8');
+const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
 assert.match(html,/id="finish-writing"[^>]*>Hiện toàn bộ lời chúc <span aria-hidden="true">↗<\/span>/,'Vietnamese button text remains valid UTF-8');
 const pending=new Set();
 class Element {
@@ -18,13 +18,14 @@ class Element {
 }
 const ids=[...html.matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]);assert.equal(new Set(ids).size,ids.length,'unique IDs');
 const elements=Object.fromEntries(ids.map(id=>[id,new Element()]));
-for(const id of ['journey','letter','envelope-wrap','music','share-fallback'])elements[id].hidden=true;
+for(const id of ['journey','letter','envelope-wrap','share-fallback'])elements[id].hidden=true;
 const brand=new Element();brand.firstChild={textContent:''};const footerBrand=new Element();
 const body=new Element('body');
 const document={body,hidden:false,activeElement:null,getElementById:id=>elements[id],createElement:tag=>new Element(tag),querySelector:selector=>selector==='[data-brand]'?brand:selector==='[data-footer-brand]'?footerBrand:null,querySelectorAll:()=>[],addEventListener(k,fn){this[k]=fn;},title:'',execCommand:()=>false};
 class Audio{constructor(){this.volume=0;}getAttribute(){return this.src;}play(){return Promise.reject(Object.assign(Error('missing'),{name:'NotSupportedError'}));}pause(){}}
 const motion={matches:false,addEventListener(){}};
-const sandbox={document,Element,Audio,matchMedia:()=>motion,window:{scrollTo(){},addEventListener(){},isSecureContext:false},navigator:{},location:{protocol:'file:'},getComputedStyle:()=>({fontSize:'40px',fontStyle:'normal'}),setTimeout:()=>1,clearTimeout(){},cancelAnimationFrame(){},requestAnimationFrame:()=>1,performance:{now:()=>0},console,Blob,URL};
+const windowEvents={};
+const sandbox={document,Element,Audio,matchMedia:()=>motion,window:{scrollY:0,scrollTo(x,y){this.scrollY=typeof x==='object'?x.top:(y||0);},addEventListener(k,fn){(windowEvents[k]??=[]).push(fn);},isSecureContext:false},navigator:{},location:{protocol:'file:'},getComputedStyle:()=>({fontSize:'40px',fontStyle:'normal'}),setTimeout:()=>1,clearTimeout(){},cancelAnimationFrame(){},requestAnimationFrame:()=>1,performance:{now:()=>0},console,Blob,URL};
 vm.createContext(sandbox);
 const source=html.match(/<script>([\s\S]*?)<\/script>/)[1];
 new vm.Script(source.replace('populate();Motion.init();','populate();Motion.init();globalThis.__motion=Motion;globalThis.__rain=FlowerRain;globalThis.__writer=Typewriter;globalThis.__formation=RoseFormation;')).runInContext(sandbox);
@@ -46,7 +47,7 @@ async function finishAll(){for(let i=0;i<20&&pending.size;i++){for(const a of [.
  await click('share');assert.equal(elements['share-fallback'].hidden,false);assert.match(elements['share-text'].value,/Nhân ngày Phụ nữ Việt Nam/,'manual share fallback contains full copy');
  await click('replay');motion.matches=true;await click('open');assert.equal(elements.letter.hidden,false,'reduced motion opens immediately');assert.equal(pending.size,0);
  sandbox.__motion.burst(100,100);assert.equal(petalLayer.childElementCount,0,'reduced motion disables touch effects');
- assert.equal(elements.music.attrs['aria-pressed'],'false','missing music fails gracefully');
+ assert.ok(!html.includes('id="music"')&&!html.includes('new Audio('),'speaker and background audio removed');
  // Exercise the canvas engine with a drawing stub and a controlled frame clock.
  let draws=0,rafID=0;const frames=new Map();
  const context=new Proxy({createLinearGradient:()=>({addColorStop(){}}),drawImage(){draws++;}},{get:(o,k)=>k in o?o[k]:()=>{}});
@@ -55,10 +56,16 @@ async function finishAll(){for(let i=0;i<20&&pending.size;i++){for(const a of [.
  Object.assign(sandbox.window,{innerWidth:390,innerHeight:844,devicePixelRatio:2});motion.matches=false;
  const advance=time=>{const batch=[...frames.values()];frames.clear();batch.forEach(fn=>fn(time));};
  const originalRecipient=elements.recipient.textContent,originalBody=elements.message.children.map(p=>p.textContent);
+ document.documentElement={scrollHeight:5000,clientWidth:390};
+ const oldRect=elements.recipient.getBoundingClientRect;
+ elements.recipient.getBoundingClientRect=()=>({top:1000-sandbox.window.scrollY,height:36});
  sandbox.__writer.start();assert.equal(elements['finish-writing'].hidden,false,'typing starts automatically');assert.equal(elements.recipient.children[1].textContent,'','ink starts empty');
  advance(16);advance(32);for(let t=48;t<900;t+=16)advance(t);assert.ok(elements.recipient.children[1].textContent.length>0,'characters advance');
+ assert.ok(sandbox.window.scrollY>400,'page automatically brings the writing into view');
+ windowEvents.wheel.forEach(fn=>fn({}));const manualY=sandbox.window.scrollY;for(let t=900;t<1100;t+=16)advance(t);assert.equal(sandbox.window.scrollY,manualY,'manual wheel stops automatic scrolling');
+ elements.recipient.getBoundingClientRect=oldRect;
  document.hidden=true;sandbox.__writer.visibility();assert.equal(frames.size,0,'typing pauses in hidden tab');document.hidden=false;sandbox.__writer.visibility();assert.equal(frames.size,1,'typing resumes once');
- for(let t=1000;t<40000;t+=16)advance(t);assert.equal(frames.size,0,'typing finishes its frame loop');assert.equal(elements['finish-writing'].hidden,true);assert.equal(elements.recipient.textContent,originalRecipient);assert.deepEqual(elements.message.children.map(p=>p.textContent),originalBody,'full Vietnamese copy preserved');
+ for(let t=1120;t<40000;t+=16)advance(t);assert.equal(frames.size,0,'typing finishes its frame loop');assert.equal(elements['finish-writing'].hidden,true);assert.equal(elements.recipient.textContent,originalRecipient);assert.deepEqual(elements.message.children.map(p=>p.textContent),originalBody,'full Vietnamese copy preserved');
  sandbox.__writer.start();await click('finish-writing');assert.equal(frames.size,0,'show all cancels typing');assert.equal(elements['finish-writing'].hidden,true);
  for(let i=0;i<5;i++){sandbox.__writer.start();sandbox.__writer.start();assert.equal(frames.size,1,'restarting typing retains one loop');sandbox.__writer.finish();assert.equal(frames.size,0);}
  motion.matches=true;sandbox.__writer.start();assert.equal(frames.size,0,'reduced motion shows full copy');motion.matches=false;
@@ -78,10 +85,11 @@ async function finishAll(){for(let i=0;i<20&&pending.size;i++){for(const a of [.
  await click('replay');await click('open');assert.equal(elements.letter.hidden,true,'letter waits for flower formation');assert.equal(elements['envelope-wrap'].hidden,true,'envelope waits for flower formation');
  for(let t=16;t<7200;t+=16)advance(t);await tick();await finishAll();assert.equal(elements.letter.hidden,false,'formation transitions through envelope to typed letter');
  await click('replay');assert.equal(frames.size,0,'replay cleans rain, formation and typewriter loops');
- console.log('PASS: syntax, unique IDs, full copy, assembly/envelope, skip, five replays, focus, visibility pause/resume, share fallback, reduced motion, missing music, petal cap and cleanup.');
+ console.log('PASS: syntax, unique IDs, full copy, assembly/envelope, skip, five replays, focus, visibility pause/resume, share fallback, reduced motion, music removal, petal cap and cleanup.');
  console.log('PASS: canvas rain population, single frame loop, tab pause/resume, fade completion, five restarts and reduced motion.');
  console.log('PASS: automatic typing, incremental characters, full copy preservation, pause/resume, show all, restart cleanup and reduced motion.');
  console.log('PASS: rose formation timing, pause/resume, cancellation, envelope sequencing and replay cleanup with a synthetic mask.');
  console.log('PASS: peach petals present on first page, stop and clean up on opening, return on replay within budget.');
- console.log('NOT VERIFIED: real browser layout, font rendering, PNG pixels, physical iOS/Android, actual MP3 playback.');
+ console.log('PASS: automatic writing scroll and manual scroll takeover.');
+ console.log('NOT VERIFIED: real browser layout, font rendering, PNG pixels, physical iOS/Android.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
